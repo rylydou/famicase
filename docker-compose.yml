@@ -1,0 +1,10 @@
+services:
+  famicase:
+    image: caddy:2-alpine
+    container_name: famicase
+    restart: unless-stopped
+    ports:
+      - "3010:80"
+    volumes:
+      - /mnt/ssd-z1/app/famicase/site:/srv:ro
+      - /mnt/ssd-z1/app/famicase/Caddyfile:/etc/caddy/Caddyfile:ro

@@ -1,0 +1,30 @@
+# Served behind Nginx Proxy Manager, which terminates TLS.
+# Plain HTTP on :80 on the internal Docker network.
+:80
+
+root * /srv
+file_server browse
+encode zstd gzip
+
+# Artwork and logos are content-addressed by year/number and never change
+# once archived, so let browsers keep them indefinitely.
+@immutable path_regexp \.(jpe?g|gif|png|webp|avif)$
+header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+# The generated indexes change on every archive run.
+@html path *.html /
+header @html Cache-Control "no-cache"
+
+# Per-cartridge metadata; cheap to refetch, revalidate hourly.
+@json path *.json
+header @json Cache-Control "public, max-age=3600"
+
+header {
+	X-Content-Type-Options nosniff
+	-Server
+}
+
+log {
+	output stdout
+	format console
+}

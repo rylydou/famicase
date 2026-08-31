@@ -1,0 +1,18 @@
+{
+  "name": "famicase-archive",
+  "version": "1.0.0",
+  "description": "Archive artwork and metadata from My Famicase Exhibition",
+  "type": "module",
+  "module": "famicase-archive.ts",
+  "scripts": {
+    "archive": "bun run famicase-archive.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "sharp": "^0.35.4"
+  }
+}
