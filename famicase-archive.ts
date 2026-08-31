@@ -20,7 +20,7 @@ import sharp from "sharp";
 const BASE = "https://famicase.com";
 const USER_AGENT =
   "famicase-archive/1.0 (personal archival script; " +
-  "https://famicase.com; contact: ryly@tryhealium.com)";
+  "contact: rylydou@gmail.com)";
 
 const ARCHIVE = new URL("./archive/", import.meta.url).pathname;
 
@@ -143,12 +143,12 @@ export async function fetchBytes(url: string, retries = 3): Promise<Uint8Array> 
  * filenames further down: EILSEQ).
  */
 export function decodeHtml(bytes: Uint8Array): string {
-  const head = new TextDecoder("latin1").decode(bytes.subarray(0, 2048));
+  const head = new TextDecoder("latin1" as any).decode(bytes.subarray(0, 2048));
   const declared = /charset\s*=\s*["']?\s*([\w-]+)/i.exec(head)?.[1];
   for (const label of [declared, "utf-8", "shift_jis"]) {
     if (!label) continue;
     try {
-      return new TextDecoder(label, { fatal: true }).decode(bytes);
+      return new TextDecoder(label as any, { fatal: true }).decode(bytes);
     } catch {
       // wrong label, or bytes invalid for it: try the next candidate
     }
@@ -1290,6 +1290,31 @@ button[aria-pressed="true"]{background:#111;color:#fff;border-color:#111}
 body.lang-en .ja{display:none}
 body.lang-en .en{display:block}
 body.lang-en .title.en{display:-webkit-box}
+
+/* Dark theme: inverted colors matching favorited cards (#000 ground, #fff text,
+   lifted greys for metadata and descriptions). Favorited tiles in dark mode invert
+   back to white ground. */
+html.theme-dark{color-scheme:dark}
+html.theme-dark,body.theme-dark{background:#000;color:#fff}
+body.theme-dark .meta,body.theme-dark .meta a{color:#9a9a9a}
+body.theme-dark .card img{background:#222}
+body.theme-dark figure:hover .card{background:#000;
+  box-shadow:0 8px 28px rgba(255,255,255,.15),0 1px 3px rgba(255,255,255,.07)}
+body.theme-dark .by{color:#9a9a9a}
+body.theme-dark .desc{color:#d8d8d8}
+body.theme-dark .title sup.lang{color:#9a9a9a}
+
+/* In dark mode, favorited tiles (.on) invert back to white ground */
+body.theme-dark figure.on .card,body.theme-dark figure.on:hover .card{background:#fff;color:#111}
+body.theme-dark figure.on .by{color:#8a8a8a}
+body.theme-dark figure.on .desc{color:#4a4a4a}
+body.theme-dark figure.on .title sup.lang{color:#999}
+
+/* Dark mode buttons and controls */
+body.theme-dark button{color:#fff;background:#000;border-color:#333}
+body.theme-dark button:hover{border-color:#fff}
+body.theme-dark button:focus-visible{outline-color:#fff}
+body.theme-dark button[aria-pressed="true"]{background:#fff;color:#111;border-color:#fff}
 `.trim();
 
 // Click-to-highlight, shared by every page. Purely visual and not persisted.
@@ -1452,6 +1477,46 @@ const LANG_JS = `
 })();
 `.trim();
 
+const PRELOAD_THEME_JS = `<script>try{if(localStorage.getItem('famicase-theme')==='dark'){document.documentElement.classList.add('theme-dark');}}catch(e){}</script>`;
+
+// Dark theme toggle script. Persists selection in localStorage.
+// No template literals: this string is interpolated into one.
+const THEME_JS = `
+(function () {
+  var btn = document.getElementById('theme');
+  var KEY = 'famicase-theme';
+
+  function set(theme, save) {
+    var dark = theme === 'dark';
+    document.documentElement.classList.toggle('theme-dark', dark);
+    document.body.classList.toggle('theme-dark', dark);
+    if (btn) {
+      btn.textContent = dark ? 'Light Theme' : 'Dark Theme';
+    }
+    if (!save) return;
+    try { localStorage.setItem(KEY, theme); } catch (err) {}
+  }
+
+  function getInitialTheme() {
+    try {
+      var saved = localStorage.getItem(KEY);
+      if (saved === 'dark' || saved === 'light') return saved;
+    } catch (err) {}
+    return 'light';
+  }
+
+  var current = getInitialTheme();
+  set(current, false);
+
+  if (btn) {
+    btn.addEventListener('click', function () {
+      var isDark = document.body.classList.contains('theme-dark');
+      set(isDark ? 'light' : 'dark', true);
+    });
+  }
+})();
+`.trim();
+
 const esc = (s: string) => Bun.escapeHTML(s);
 
 /**
@@ -1547,6 +1612,7 @@ export function renderYearPage(records: GameRecord[], year: string): string {
 <style>
 ${PAGE_CSS}
 </style>
+${PRELOAD_THEME_JS}
 </head>
 <body>
   <div class="wrap">
@@ -1554,7 +1620,10 @@ ${PAGE_CSS}
       <h1>My Famicase Exhibition ${label}</h1>
       <p class="meta">${records.length} entries &middot; archived from
         <a href="${BASE}/${year}/index.html">famicase.com</a></p>
-      ${toggle ? `<div class="tools">${toggle}</div>` : ""}
+      <div class="tools">
+        <button id="theme" type="button">Dark Theme</button>
+        ${toggle}
+      </div>
     </header>
     <div class="grid">
 ${cards}
@@ -1563,6 +1632,7 @@ ${cards}
 <script>
 ${HIGHLIGHT_JS}
 ${LANG_JS}
+${THEME_JS}
 </script>
 </body>
 </html>
@@ -1643,6 +1713,23 @@ body.only-favs figure:not(.on){display:none}
 .scrub:not(.on):not(:hover) .now{background:none;color:transparent;padding:0;width:0}
 @media(hover:none){.scrub{width:58px}}
 @media(max-width:440px){.scrub{display:none}}
+
+/* Dark mode for master page credit blurb, input groups, and year scrubber */
+body.theme-dark .credit,body.theme-dark .credit a{color:#9a9a9a}
+body.theme-dark .group{border-color:#333}
+body.theme-dark .group:focus-within{border-color:#fff}
+body.theme-dark .group button{border-left-color:#333}
+body.theme-dark .group button:hover:not(:disabled){background:#1a1a1a}
+body.theme-dark .group button:disabled{color:#444}
+body.theme-dark .group input{color:#fff;background:#000;border-left-color:#333}
+body.theme-dark .group input::placeholder{color:#555}
+
+body.theme-dark .scrub .tick{color:#555}
+body.theme-dark .scrub .tick::after{background:#333}
+body.theme-dark .scrub .tick.cur{color:#fff}
+body.theme-dark .scrub .tick.cur::after{background:#fff}
+body.theme-dark .scrub .now{background:#fff;color:#111}
+body.theme-dark .scrub .now::after{background:#fff}
 `.trim();
 
 // Deterministic shuffle so a seed in the URL reproduces an exact order.
@@ -1896,6 +1983,7 @@ export function renderMasterPage(byYear: Map<string, GameRecord[]>): string {
 ${PAGE_CSS}
 ${MASTER_CSS}
 </style>
+${PRELOAD_THEME_JS}
 </head>
 <body>
   <div class="wrap">
@@ -1914,6 +2002,7 @@ ${MASTER_CSS}
       <div class="tools">
         <button id="favs" type="button" aria-pressed="false" disabled>Favorites</button>
         <button id="favs-io" type="button">Import/export favorites</button>
+        <button id="theme" type="button">Dark Theme</button>
         ${langToggle(all)}
         <span class="group" role="group" aria-label="Order">
           <button id="shuffle" type="button">Shuffle</button>
@@ -1936,6 +2025,7 @@ ${FAVORITES_JS}
 ${MASTER_JS}
 ${SCRUB_JS}
 ${LANG_JS}
+${THEME_JS}
 </script>
 </body>
 </html>
