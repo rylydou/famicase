@@ -137,8 +137,27 @@ export async function fetchBytes(url: string, retries = 3): Promise<Uint8Array> 
   throw new Error(`failed after ${retries} attempts: ${url} (${lastErr})`);
 }
 
+/**
+ * Pre-2013 pages are Shift_JIS; the year indexes declare no charset at all,
+ * so sniff instead of assuming UTF-8 (mojibake titles become unwritable
+ * filenames further down: EILSEQ).
+ */
+export function decodeHtml(bytes: Uint8Array): string {
+  const head = new TextDecoder("latin1").decode(bytes.subarray(0, 2048));
+  const declared = /charset\s*=\s*["']?\s*([\w-]+)/i.exec(head)?.[1];
+  for (const label of [declared, "utf-8", "shift_jis"]) {
+    if (!label) continue;
+    try {
+      return new TextDecoder(label, { fatal: true }).decode(bytes);
+    } catch {
+      // wrong label, or bytes invalid for it: try the next candidate
+    }
+  }
+  return new TextDecoder("utf-8").decode(bytes); // lossy, but never throws
+}
+
 async function fetchText(url: string): Promise<string> {
-  return new TextDecoder("utf-8").decode(await fetchBytes(url));
+  return decodeHtml(await fetchBytes(url));
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +227,41 @@ function firstTextCollector() {
   };
 }
 
+/**
+ * Accumulate EVERY matching element, one cleaned line each.
+ * 2013+ entries often split the blurb across many <p class="ss">, so keeping
+ * only the first (as firstTextCollector does) silently dropped the rest.
+ */
+function allTextCollector() {
+  const parts: string[] = [];
+  let chunks: string[] | null = null;
+  const flush = () => {
+    if (!chunks) return;
+    const text = cleanText(chunks.join(""));
+    chunks = null;
+    if (text.length > 0) parts.push(text);
+  };
+  return {
+    element(el: HTMLRewriterTypes.Element) {
+      flush(); // no nesting in these pages, so a new start tag ends the last
+      chunks = [];
+      try {
+        el.onEndTag(() => flush());
+      } catch {
+        flush(); // self-closing element: nothing to accumulate
+      }
+    },
+    text(chunk: HTMLRewriterTypes.Text) {
+      if (chunks) chunks.push(chunk.text);
+    },
+    value(): string | null {
+      flush();
+      const joined = parts.join("\n");
+      return joined.length > 0 ? joined : null;
+    },
+  };
+}
+
 const SOFT_RE = /softs\/(\d+)\.html$/;
 
 /** Collect softs/NNN.html links from a year index, order preserved, deduped. */
@@ -238,17 +292,21 @@ export interface Detail {
   images: string[];
 }
 
-/** Read h3 / h4 / p.ss text plus every <img src> in document order. */
+/** Read h3 / h4 / description text plus every <img src> in document order. */
 export async function parseDetail(html: string, pageUrl: string): Promise<Detail> {
   const title = firstTextCollector();
   const credit = firstTextCollector();
-  const description = firstTextCollector();
+  const description = allTextCollector();
   const images: string[] = [];
 
   await new HTMLRewriter()
     .on("h3", title)
     .on("h4", credit)
-    .on("p.ss", description)
+    // The blurb class is inconsistent across years and includes outright typos:
+    // "ss" (2013+), "small" (most of 2013), "sss" and "ssss" (scattered).
+    .on('p[class^="s"]', description)
+    // 2012 wraps the blurb in <div id="text"> instead of a <p> at all.
+    .on("div#text", description)
     .on("img[src]", {
       element(el) {
         const src = el.getAttribute("src");
@@ -259,18 +317,61 @@ export async function parseDetail(html: string, pageUrl: string): Promise<Detail
     .transform(new Response(html))
     .text();
 
-  return {
+  const detail: Detail = {
     title: title.value(),
     credit: credit.value(),
     description: description.value(),
     images,
+  };
+  // 2008-2011 predate the h3/h4 layout entirely (see parseLegacyDetail).
+  return detail.title === null ? { ...parseLegacyDetail(html), images } : detail;
+}
+
+// Any element can carry it: <span>, <p>, and 2008's stray <td class="style2">.
+const STYLE2_RE = /<(\w+)\s[^>]*class="style2"[^>]*>([\s\S]*?)<\/\1>/gi;
+const STRONG_RE = /<strong>([\s\S]*?)<\/strong>/i;
+const FIRST_BR_RE = /<br\s*\/?>/i;
+const ANCHOR_RE = /<a\s[^>]*>[\s\S]*?<\/a>/gi;
+const TAG_RE = /<[^>]*>/g;
+
+/** Strip the decorative quoting around 2008-2010 titles: " x "  /  「 x 」. */
+function unquoteTitle(text: string): string {
+  return text.replace(/^["“「『【]\s*/, "").replace(/\s*["”」』】]$/, "").trim();
+}
+
+/**
+ * 2008-2011 have no h3/h4/p.ss: every field lives in .style2 blocks, with the
+ * title and "creator / occupation" line packed into one <strong> and split by a
+ * <br>. Trailing "Official Site" anchors are markup, not part of the credit.
+ * HTMLRewriter cannot express "text of this element but not of its <strong>",
+ * so these pages are parsed as text.
+ */
+export function parseLegacyDetail(html: string): Omit<Detail, "images"> {
+  const blocks = [...html.matchAll(STYLE2_RE)].map((m) => m[2]!);
+  const head = blocks.find((b) => STRONG_RE.test(b));
+  const strong = head ? STRONG_RE.exec(head)![1]! : "";
+  const [titleRaw = "", creditRaw = ""] = strong
+    .replace(ANCHOR_RE, "")
+    .split(FIRST_BR_RE)
+    .map((part) => cleanText(part.replace(TAG_RE, " ")));
+
+  // Whatever is left once the header <strong> is removed is the description.
+  const body = blocks
+    .map((b) => cleanText(b.replace(STRONG_RE, " ").replace(ANCHOR_RE, " ").replace(TAG_RE, " ")))
+    .filter((b) => b.length > 0);
+
+  const title = unquoteTitle(titleRaw);
+  return {
+    title: title.length > 0 ? title : null,
+    credit: creditRaw.length > 0 ? creditRaw : null,
+    description: body.length > 0 ? body.join("\n") : null,
   };
 }
 
 /**
  * Split "Name|Occupation|Country".
  * 2026 mostly uses the fullwidth U+FF5C, but a handful of entries mix in an
- * ASCII pipe; 2015-era pages use " / " and carry no country.
+ * ASCII pipe; 2012-2015-era pages use "／" or " / " and carry no country.
  */
 export function splitCredit(credit: string | null): Credit {
   const out: Credit = {
@@ -281,7 +382,7 @@ export function splitCredit(credit: string | null): Credit {
   };
   if (!credit) return out;
   let parts = credit.split(/[｜|]/).map((p) => p.trim());
-  if (parts.length === 1) parts = credit.split("/").map((p) => p.trim());
+  if (parts.length === 1) parts = credit.split(/[／/]/).map((p) => p.trim());
   const fields = parts.filter((p) => p.length > 0);
   out.creator = fields[0] ?? null;
   out.occupation = fields[1] ?? null;
@@ -1135,14 +1236,14 @@ figure:hover{z-index:30}
 .card{position:absolute;top:0;left:0;right:0;padding:10px;
   transition:background-color .16s ease,box-shadow .16s ease}
 .card picture{display:block}
-.card img{width:100%;height:auto;display:block;background:#f5f5f5}
+.card img{width:100%;height:auto;display:block;background:#e0e0e0;color:transparent;font-size:0}
 .title{font-size:13px;font-weight:600;line-height:1.3;margin:6px 0 0;
   display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
 .title sup.lang{font-size:9px;font-weight:400;color:#999;margin-left:2px}
 figure.on .title sup.lang{color:#9a9a9a}
 .more{max-height:0;overflow:hidden;opacity:0;transition:opacity .16s ease}
 .by{font-size:11.5px;color:#8a8a8a;margin:7px 0 0}
-.desc{font-size:12px;line-height:1.55;color:#4a4a4a;margin:6px 0 0}
+.desc{font-size:12px;line-height:1.55;color:#4a4a4a;margin:6px 0 0;white-space:pre-line}
 
 figure:hover .card{background:#fff;
   box-shadow:0 8px 28px rgba(0,0,0,.15),0 1px 3px rgba(0,0,0,.07)}
@@ -1474,6 +1575,11 @@ ${LANG_JS}
 
 // Toolbar for the master page: same white ground, so it stays out of the way.
 const MASTER_CSS = `
+/* Legal/credit blurb: a footnote under the stats line, quieter and narrower
+   so it reads as fine print rather than competing with the header. */
+.credit{max-width:640px;margin-top:6px;font-size:11.5px;line-height:1.5;color:#aaa}
+.credit a{color:#aaa}
+
 /* The year rail is this page's scrollbar, so the browser's own is redundant. */
 html{scrollbar-width:none}
 html::-webkit-scrollbar{display:none}
@@ -1488,7 +1594,7 @@ html::-webkit-scrollbar{display:none}
 .group button:hover:not(:disabled){background:#f4f4f4}
 .group button:disabled{color:#bbb;cursor:default}
 .group input{font:12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#111;
-  border:0;border-left:1px solid #ddd;padding:8px;width:8ch;text-align:center;
+  border:0;border-left:1px solid #ddd;padding:8px;width:12ch;text-align:center;
   background:#fff}
 .group input:focus{outline:0}
 .group input::placeholder{color:#aaa}
@@ -1780,7 +1886,12 @@ export function renderMasterPage(byYear: Map<string, GameRecord[]>): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>My Famicase Exhibition &middot; archive</title>
+<title>My Famicase Exhibition Archive</title>
+<meta name="description" content="An unofficial, fan-made archive of My Famicase Exhibition, preserving ${all.length} imaginary Famicom cartridge labels across ${years.length} ${years.length === 1 ? "year" : "years"}${span ? ` (${esc(span)})` : ""} for personal reference and appreciation.">
+<link rel="canonical" href="${BASE}/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="My Famicase Exhibition Archive">
+<meta property="og:description" content="An unofficial, fan-made archive of My Famicase Exhibition, preserving imaginary Famicom cartridge labels for personal reference and appreciation.">
 <style>
 ${PAGE_CSS}
 ${MASTER_CSS}
@@ -1789,10 +1900,17 @@ ${MASTER_CSS}
 <body>
   <div class="wrap">
     <header>
-      <h1>My Famicase Exhibition &middot; archive</h1>
+      <h1>My Famicase Exhibition Archive</h1>
       <p class="meta">${all.length} entries across ${years.length}
-        ${years.length === 1 ? "year" : "years"}${span ? ` (${esc(span)})` : ""} &middot;
-        archived from <a href="${BASE}/">famicase.com</a></p>
+        ${years.length === 1 ? "year" : "years"}${span ? ` (${esc(span)})` : ""}
+      <p class="meta credit">All artwork and text here belongs to the original
+        <a href="${BASE}/">My Famicase Exhibition</a> and its contributing artists.
+        This is an unofficial, non-commercial mirror kept for personal
+        reference and preservation &mdash; not affiliated with the original site.
+        Please visit and support the source at <a href="${BASE}/">famicase.com</a>.
+        Non-English titles and descriptions include AI-generated translations,
+        which may contain inaccuracies and may not fully capture the original
+        artist's intent &mdash; when in doubt, refer to the original text.</p>
       <div class="tools">
         <button id="favs" type="button" aria-pressed="false" disabled>Favorites</button>
         <button id="favs-io" type="button">Import/export favorites</button>
