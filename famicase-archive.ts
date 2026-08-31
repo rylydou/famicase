@@ -1335,7 +1335,7 @@ const LANG_JS = `
   function set(lang, save) {
     var en = lang === 'en';
     document.body.classList.toggle('lang-en', en);
-    btn.textContent = en ? '\u65e5\u672c\u8a9e' : 'English';   // offer the other one
+    btn.textContent = en ? 'Translated Text' : 'Original Text';   // offer the other one
     btn.setAttribute('aria-pressed', en ? 'true' : 'false');
     if (!save) return;
     try { localStorage.setItem(KEY, lang); } catch (err) {}  // private mode throws
@@ -1478,8 +1478,23 @@ const MASTER_CSS = `
 html{scrollbar-width:none}
 html::-webkit-scrollbar{display:none}
 
-.seed{font:12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#888}
-.seed input{font:inherit;color:#111;border:1px solid #ddd;padding:7px 8px;width:11ch}
+/* Shuffle, seed and reset read as one control: a single hairline box with
+   flush segments, so three widgets cost the space of one. The seed field is
+   the status readout too - empty means exhibition order. */
+.group{display:inline-flex;align-items:stretch;border:1px solid #ddd}
+.group:focus-within{border-color:#111}
+.group button{border:0;border-left:1px solid #ddd}
+.group button:first-child{border-left:0}
+.group button:hover:not(:disabled){background:#f4f4f4}
+.group button:disabled{color:#bbb;cursor:default}
+.group input{font:12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:#111;
+  border:0;border-left:1px solid #ddd;padding:8px;width:8ch;text-align:center;
+  background:#fff}
+.group input:focus{outline:0}
+.group input::placeholder{color:#aaa}
+
+/* Announced to screen readers; the controls themselves show the state. */
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 
 /* Year scrubber: a Google-Photos-style rail pinned to the right edge. Ticks sit
    where each year begins, proportional to the scroll range, and the rail only
@@ -1532,6 +1547,7 @@ const MASTER_JS = `
   var tiles = Array.prototype.slice.call(grid.children);
   var input = document.getElementById('seed');
   var status = document.getElementById('status');
+  var reset = document.getElementById('reset');
 
   function rng(seed) {                      // mulberry32
     var a = seed >>> 0;
@@ -1592,6 +1608,7 @@ const MASTER_JS = `
     if (seed === current) return;
     current = seed;
     input.value = seed;
+    reset.disabled = !seed;
     apply(seed);
     if (push) writeSeed(seed);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1600,7 +1617,7 @@ const MASTER_JS = `
   document.getElementById('shuffle').addEventListener('click', function () {
     set(Math.random().toString(36).slice(2, 8), true);
   });
-  document.getElementById('reset').addEventListener('click', function () {
+  reset.addEventListener('click', function () {
     set('', true);
   });
   input.addEventListener('change', function () {
@@ -1777,14 +1794,16 @@ ${MASTER_CSS}
         ${years.length === 1 ? "year" : "years"}${span ? ` (${esc(span)})` : ""} &middot;
         archived from <a href="${BASE}/">famicase.com</a></p>
       <div class="tools">
-        <button id="shuffle" type="button">Shuffle</button>
-        <button id="reset" type="button">Reset</button>
         <button id="favs" type="button" aria-pressed="false" disabled>Favorites</button>
         <button id="favs-io" type="button">Import/export favorites</button>
-        <label class="seed">seed <input id="seed" type="text" spellcheck="false"
-          autocomplete="off" placeholder="none"></label>
-        <span class="seed" id="status" role="status"></span>
         ${langToggle(all)}
+        <span class="group" role="group" aria-label="Order">
+          <button id="shuffle" type="button">Shuffle</button>
+          <input id="seed" type="text" spellcheck="false" autocomplete="off"
+            aria-label="Shuffle seed" placeholder="seed">
+          <button id="reset" type="button" disabled>Reset</button>
+        </span>
+        <span id="status" role="status" class="sr-only"></span>
       </div>
     </header>
     <div class="grid" id="grid">
