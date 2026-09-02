@@ -1609,6 +1609,7 @@ export function renderYearPage(records: GameRecord[], year: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>My Famicase Exhibition ${label}</title>
+<link rel="icon" href="${BASE}/favicon.ico">
 <style>
 ${PAGE_CSS}
 </style>
@@ -1976,6 +1977,7 @@ export function renderMasterPage(byYear: Map<string, GameRecord[]>): string {
 <title>My Famicase Exhibition Archive</title>
 <meta name="description" content="An unofficial, fan-made archive of My Famicase Exhibition, preserving ${all.length} imaginary Famicom cartridge labels across ${years.length} ${years.length === 1 ? "year" : "years"}${span ? ` (${esc(span)})` : ""} for personal reference and appreciation.">
 <link rel="canonical" href="${BASE}/">
+<link rel="icon" href="${BASE}/favicon.ico">
 <meta property="og:type" content="website">
 <meta property="og:title" content="My Famicase Exhibition Archive">
 <meta property="og:description" content="An unofficial, fan-made archive of My Famicase Exhibition, preserving imaginary Famicom cartridge labels for personal reference and appreciation.">
